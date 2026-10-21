@@ -2,7 +2,9 @@ import operator
 from threading import Lock
 from typing import Annotated, TypedDict
 
+from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.config import get_stream_writer
 from langgraph.graph import END, START, StateGraph
 
 from app.rag.generator import MODEL, get_client
@@ -105,8 +107,8 @@ def build_agent(store: FaissVectorStore, store_lock: Lock, checkpointer=None):
         text = "\n".join(sources) or "The knowledge base is empty."
         return [{"type": "text", "text": text}]
 
-    def call_model(state: AgentState) -> dict:
-        response = get_client().beta.messages.create(
+    def call_model(state: AgentState, config: RunnableConfig) -> dict:
+        params = dict(
             model=MODEL,
             max_tokens=16000,
             output_config={"effort": "medium"},
@@ -117,6 +119,20 @@ def build_agent(store: FaissVectorStore, store_lock: Lock, checkpointer=None):
             tools=TOOLS,
             messages=state["messages"],
         )
+
+        if config["configurable"].get("stream_text"):
+            # Forward answer text as it is generated; graph.stream() callers
+            # receive it in stream_mode "custom".
+            write = get_stream_writer()
+
+            with get_client().beta.messages.stream(**params) as stream:
+                for event in stream:
+                    if event.type == "text":
+                        write({"type": "text", "delta": event.text})
+
+                response = stream.get_final_message()
+        else:
+            response = get_client().beta.messages.create(**params)
 
         if response.stop_reason == "refusal":
             content = [

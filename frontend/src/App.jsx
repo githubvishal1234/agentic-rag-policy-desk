@@ -51,21 +51,49 @@ function storeHistory(history) {
   }
 }
 
+async function errorFrom(response) {
+  const body = await response.json().catch(() => null);
+  const error = new Error(
+    typeof body?.detail === "string"
+      ? body.detail
+      : `The server returned an error (${response.status}).`,
+  );
+  error.status = response.status;
+  return error;
+}
+
 async function request(path, options) {
   const response = await fetch(path, options);
-  const body = await response.json().catch(() => null);
+  if (!response.ok) throw await errorFrom(response);
+  return response.json();
+}
 
-  if (!response.ok) {
-    const error = new Error(
-      typeof body?.detail === "string"
-        ? body.detail
-        : `The server returned an error (${response.status}).`,
-    );
-    error.status = response.status;
-    throw error;
+// POST /chat/stream and call onEvent for each Server-Sent Event as it
+// arrives. (EventSource can't send a POST body, so read the stream directly.)
+async function streamChat(body, onEvent) {
+  const response = await fetch("/chat/stream", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!response.ok) throw await errorFrom(response);
+
+  const reader = response.body.pipeThrough(new TextDecoderStream()).getReader();
+  let buffer = "";
+
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) return;
+
+    buffer += value;
+    const events = buffer.split("\n\n");
+    buffer = events.pop();
+
+    for (const event of events) {
+      const data = event.split("\n").find((line) => line.startsWith("data: "));
+      if (data) onEvent(JSON.parse(data.slice(6)));
+    }
   }
-
-  return body;
 }
 
 export default function App() {
@@ -217,12 +245,26 @@ function Workspace({ role, authRequired, onSignOut, onExpired }) {
     const id = crypto.randomUUID();
     setTurns((all) => [...all, { id, question, status: "pending" }]);
 
+    const changeTurn = (change) =>
+      setTurns((all) => all.map((turn) => (turn.id === id ? change(turn) : turn)));
+
     try {
-      const result = await request("/chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: question, thread_id: threadId }),
+      let result = null;
+
+      await streamChat({ message: question, thread_id: threadId }, (event) => {
+        if (event.type === "tool") {
+          changeTurn((turn) => ({ ...turn, tools: [...(turn.tools ?? []), event] }));
+        } else if (event.type === "text") {
+          changeTurn((turn) => ({ ...turn, streamText: (turn.streamText ?? "") + event.delta }));
+        } else if (event.type === "done") {
+          result = event;
+        } else if (event.type === "error") {
+          throw new Error(event.detail);
+        }
       });
+
+      if (!result) throw new Error("The answer stopped before it finished.");
+
       setThreadId(result.thread_id);
       saveThread(result.thread_id);
       updateHistory((current) => {
@@ -510,14 +552,10 @@ function Turn({ turn, onRetry }) {
   }, [turn.status]);
 
   return (
-    <article className="turn" ref={ref}>
+    <article className="turn" ref={ref} aria-busy={turn.status === "pending"}>
       <h2 className="question">{turn.question}</h2>
 
-      {turn.status === "pending" && (
-        <p className="pending" role="status">
-          <span>Searching the documents</span>
-        </p>
-      )}
+      {turn.status === "pending" && <PendingAnswer turn={turn} />}
 
       {turn.status === "error" && (
         <div className="turn-error" role="alert">
@@ -530,6 +568,34 @@ function Turn({ turn, onRetry }) {
 
       {turn.status === "done" && <Answer id={turn.id} result={turn.result} />}
     </article>
+  );
+}
+
+// What the agent has done so far: its searches, then the answer as it's
+// written. Citations appear once the answer is complete.
+function PendingAnswer({ turn }) {
+  const searches = (turn.tools ?? [])
+    .filter((call) => call.name === "search_documents")
+    .map((call) => `“${call.input.query}”`);
+
+  return (
+    <>
+      {searches.length > 0 && (
+        <p className="searched">Searched for {listFormat.format(searches)}</p>
+      )}
+
+      {turn.streamText ? (
+        <div className="answer answer-layout no-sources">
+          <div className="streaming">
+            <ReactMarkdown>{turn.streamText}</ReactMarkdown>
+          </div>
+        </div>
+      ) : (
+        <p className="pending" role="status">
+          <span>{searches.length ? "Reading what it found" : "Searching the documents"}</span>
+        </p>
+      )}
+    </>
   );
 }
 

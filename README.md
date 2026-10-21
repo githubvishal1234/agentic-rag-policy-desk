@@ -39,6 +39,7 @@ curl -X POST http://localhost:8000/chat -H "Content-Type: application/json" -d '
 | `POST /ingest` | Upload a .txt/.pdf/.docx file; it is chunked, embedded and saved to `data/vectorstore/` |
 | `POST /query` | `{"question", "k"}` → hybrid search (vector + BM25 keyword, fused with RRF), then an answer with citations plus the retrieved sources |
 | `POST /chat` | `{"message", "thread_id"?}` → LangGraph agent: Claude decides when and how often to search (`search_documents`, `list_documents` tools), remembers the conversation per `thread_id` (stored in `data/conversations.sqlite`, so it survives restarts), and answers with citations |
+| `POST /chat/stream` | Same as `/chat`, as Server-Sent Events: each tool call, answer text as it is written, then the full result (used by the frontend) |
 | `GET /chat/{thread_id}` | The conversation so far, turn by turn |
 | `GET /documents` | Files in the knowledge base, with chunk counts |
 | `DELETE /documents/{name}` | Remove a file and its chunks from the index |

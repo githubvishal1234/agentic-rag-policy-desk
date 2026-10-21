@@ -573,6 +573,34 @@ code {
   }
 }
 
+/* A thin caret marks where the answer is still being written. */
+.streaming > :last-child::after {
+  content: "";
+  display: inline-block;
+  width: 2px;
+  height: 1.1em;
+  margin-left: 2px;
+  vertical-align: -0.15em;
+  background: var(--action);
+  animation: blink 1s steps(1) infinite;
+}
+
+.streaming > :first-child {
+  margin-top: 0;
+}
+
+@keyframes blink {
+  50% {
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .streaming > :last-child::after {
+    animation: none;
+  }
+}
+
 .turn-error {
   display: flex;
   flex-wrap: wrap;

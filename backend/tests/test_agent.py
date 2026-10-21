@@ -31,14 +31,60 @@ def tool_use(tool_id, name, tool_input):
     return {"type": "tool_use", "id": tool_id, "name": name, "input": tool_input}
 
 
+def as_event_stream(message):
+    """The Messages API streaming events that build up `message`."""
+    events = [{"type": "message_start", "message": {**message, "content": [], "stop_reason": None}}]
+
+    for index, block in enumerate(message["content"]):
+        if block["type"] == "text":
+            start = {"type": "text", "text": ""}
+            if "citations" in block:
+                start["citations"] = []
+            # Two text deltas, to check the endpoint forwards each piece.
+            half = len(block["text"]) // 2
+            deltas = [
+                {"type": "text_delta", "text": block["text"][:half]},
+                {"type": "text_delta", "text": block["text"][half:]},
+            ] + [{"type": "citations_delta", "citation": c} for c in block.get("citations", [])]
+        elif block["type"] == "tool_use":
+            start = {**block, "input": {}}
+            deltas = [{"type": "input_json_delta", "partial_json": json.dumps(block["input"])}]
+        else:  # thinking
+            start = {"type": "thinking", "thinking": "", "signature": ""}
+            deltas = [
+                {"type": "thinking_delta", "thinking": block["thinking"]},
+                {"type": "signature_delta", "signature": block["signature"]},
+            ]
+
+        events.append({"type": "content_block_start", "index": index, "content_block": start})
+        events += [{"type": "content_block_delta", "index": index, "delta": d} for d in deltas]
+        events.append({"type": "content_block_stop", "index": index})
+
+    events += [
+        {"type": "message_delta", "delta": {"stop_reason": message["stop_reason"], "stop_sequence": None}, "usage": {"output_tokens": 1}},
+        {"type": "message_stop"},
+    ]
+    return "".join(f"event: {e['type']}\ndata: {json.dumps(e)}\n\n" for e in events)
+
+
 @pytest.fixture
 def claude(monkeypatch):
     """Scripted Claude: queue replies in .responses; requests land in .requests."""
     script = SimpleNamespace(responses=[], requests=[])
 
     def handler(request):
-        script.requests.append(json.loads(request.content))
-        return httpx2.Response(200, json=script.responses.pop(0))
+        body = json.loads(request.content)
+        script.requests.append(body)
+        message = script.responses.pop(0)
+
+        if body.get("stream"):
+            return httpx2.Response(
+                200,
+                headers={"content-type": "text/event-stream"},
+                content=as_event_stream(message).encode(),
+            )
+
+        return httpx2.Response(200, json=message)
 
     client = anthropic.Anthropic(
         api_key="test",
@@ -235,3 +281,71 @@ def test_conversation_turns_skips_unanswered_turns():
         ("First?", "One."),
         ("Third?", "Three."),
     ]
+
+
+def stream_events(client, body):
+    response = client.post("/chat/stream", json=body)
+    assert response.headers["content-type"].startswith("text/event-stream")
+    return [
+        json.loads(line[len("data: "):])
+        for line in response.text.splitlines()
+        if line.startswith("data: ")
+    ]
+
+
+def test_chat_stream(client, claude, docs_dir):
+    with (docs_dir / "company_it_policy.txt").open("rb") as file:
+        client.post("/ingest", files={"file": ("company_it_policy.txt", file)})
+
+    claude.responses = [
+        reply(
+            {"type": "thinking", "thinking": "", "signature": "sig-1"},
+            tool_use("toolu_1", "search_documents", {"query": "VPN"}),
+            stop_reason="tool_use",
+        ),
+        reply({
+            "type": "text",
+            "text": "Use the approved VPN.",
+            "citations": [{
+                "type": "search_result_location",
+                "cited_text": "Employees accessing company systems remotely must use the approved VPN.",
+                "source": "company_it_policy.txt",
+                "title": "company_it_policy.txt (chunk 1)",
+                "search_result_index": 0,
+                "start_block_index": 0,
+                "end_block_index": 1,
+            }],
+        }),
+    ]
+
+    events = stream_events(client, {"message": "How do I work remotely?"})
+
+    assert [e["type"] for e in events] == ["tool", "text", "text", "done"]
+    assert events[0] == {"type": "tool", "name": "search_documents", "input": {"query": "VPN"}}
+    assert "".join(e["delta"] for e in events if e["type"] == "text") == "Use the approved VPN."
+
+    done = events[-1]
+    assert done["answer"] == "Use the approved VPN."
+    assert done["citations"][0]["source"] == "company_it_policy.txt"
+    assert done["segments"] == [{"text": "Use the approved VPN.", "citations": [0]}]
+    assert all(request["stream"] for request in claude.requests)
+
+    # The streamed turn was saved like any other: the thread continues.
+    assert [t["question"] for t in client.get(f"/chat/{done['thread_id']}").json()["turns"]] == [
+        "How do I work remotely?"
+    ]
+    # The thinking signature survived stream accumulation for replay.
+    assert claude.requests[1]["messages"][1]["content"][0]["signature"] == "sig-1"
+
+
+def test_chat_stream_reports_llm_errors(client, monkeypatch):
+    def failing_client():
+        raise anthropic.APIConnectionError(request=httpx2.Request("POST", "https://api.anthropic.com"))
+
+    monkeypatch.setattr(rag_agent, "get_client", failing_client)
+
+    events = stream_events(client, {"message": "Hi"})
+
+    assert events[-1]["type"] == "error"
+    assert "LLM request failed" in events[-1]["detail"]
+

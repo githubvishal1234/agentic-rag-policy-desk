@@ -8,8 +8,11 @@ from pathlib import Path
 from threading import Lock
 from uuid import uuid4
 
+import json
+
 import anthropic
 from fastapi import Depends, FastAPI, HTTPException, UploadFile
+from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.errors import GraphRecursionError
@@ -222,6 +225,59 @@ def chat(request: ChatRequest):
 
     return {"thread_id": thread_id, **summarize_turn(state["messages"])}
 
+
+
+@app.post("/chat/stream", dependencies=[Depends(require_user)])
+def chat_stream(request: ChatRequest):
+    """Like /chat, as Server-Sent Events while the agent works:
+    {"type": "tool", "name", "input"} for each tool call, {"type": "text",
+    "delta"} for answer text, then {"type": "done", ...same body as /chat}
+    or {"type": "error", "detail"}.
+    """
+
+    require_credentials()
+    thread_id = request.thread_id or str(uuid4())
+    config = {"configurable": {"thread_id": thread_id, "stream_text": True}}
+
+    def event(data: dict) -> str:
+        return f"data: {json.dumps(data)}\n\n"
+
+    def events():
+        try:
+            for mode, chunk in app.state.agent.stream(
+                {"messages": [{"role": "user", "content": request.message}]},
+                config,
+                stream_mode=["custom", "updates"],
+            ):
+                if mode == "custom":
+                    yield event(chunk)
+                elif "model" in chunk:
+                    for message in chunk["model"]["messages"]:
+                        for block in message["content"]:
+                            if block["type"] == "tool_use":
+                                yield event({
+                                    "type": "tool",
+                                    "name": block["name"],
+                                    "input": block["input"],
+                                })
+
+            messages = app.state.agent.get_state(config).values["messages"]
+            yield event({
+                "type": "done",
+                "thread_id": thread_id,
+                **summarize_turn(messages),
+            })
+        except anthropic.APIError as error:
+            yield event({"type": "error", "detail": f"LLM request failed: {error}"})
+        except GraphRecursionError:
+            yield event({"type": "error", "detail": "The agent took too many steps"})
+
+    return StreamingResponse(
+        events(),
+        media_type="text/event-stream",
+        # Stop proxies from buffering the stream.
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @app.get("/chat/{thread_id}", dependencies=[Depends(require_user)])
