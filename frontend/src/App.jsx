@@ -48,6 +48,93 @@ async function request(path, options) {
 }
 
 export default function App() {
+  // undefined while checking; then { role, auth_required } from /me.
+  const [me, setMe] = useState(undefined);
+
+  useEffect(() => {
+    request("/me")
+      .then(setMe)
+      // Server unreachable: show the workspace, which explains the problem.
+      .catch(() => setMe({ role: "admin", auth_required: false }));
+  }, []);
+
+  if (me === undefined) return null;
+
+  if (!me.role) {
+    return <SignIn onSignedIn={(role) => setMe({ ...me, role })} />;
+  }
+
+  async function signOut() {
+    await request("/logout", { method: "POST" }).catch(() => {});
+    saveThread(null);
+    setMe({ ...me, role: null });
+  }
+
+  return (
+    <Workspace
+      role={me.role}
+      authRequired={me.auth_required}
+      onSignOut={signOut}
+      onExpired={() => setMe((current) => ({ ...current, role: null }))}
+    />
+  );
+}
+
+function SignIn({ onSignedIn }) {
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState(null);
+  const [busy, setBusy] = useState(false);
+
+  async function submit(event) {
+    event.preventDefault();
+    setBusy(true);
+    setError(null);
+
+    try {
+      const { role } = await request("/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ password }),
+      });
+      onSignedIn(role);
+    } catch (failure) {
+      setError(failure.message);
+      setBusy(false);
+    }
+  }
+
+  return (
+    <main className="signin">
+      <form className="signin-form" onSubmit={submit}>
+        <p className="brand">Policy Desk</p>
+        <h1>Sign in</h1>
+        <p className="muted">Use the password your administrator gave you.</p>
+
+        <label htmlFor="password">Password</label>
+        <input
+          id="password"
+          type="password"
+          autoComplete="current-password"
+          autoFocus
+          value={password}
+          onChange={(event) => setPassword(event.target.value)}
+        />
+
+        {error && (
+          <p className="signin-error" role="alert">
+            {error}
+          </p>
+        )}
+
+        <button className="ask-button" type="submit" disabled={busy || !password}>
+          {busy ? "Signing in…" : "Sign in"}
+        </button>
+      </form>
+    </main>
+  );
+}
+
+function Workspace({ role, authRequired, onSignOut, onExpired }) {
   // undefined while loading, null when the server can't be reached.
   const [health, setHealth] = useState(undefined);
   const [documents, setDocuments] = useState([]);
@@ -55,7 +142,9 @@ export default function App() {
   const [threadId, setThreadId] = useState(savedThread);
 
   const loadDocuments = () =>
-    request("/documents").then(setDocuments).catch(() => {});
+    request("/documents")
+      .then(setDocuments)
+      .catch((error) => error.status === 401 && onExpired());
 
   useEffect(() => {
     request("/health").then(setHealth).catch(() => setHealth(null));
@@ -103,6 +192,7 @@ export default function App() {
       saveThread(result.thread_id);
       updateTurn(id, { status: "done", result });
     } catch (error) {
+      if (error.status === 401) onExpired();
       updateTurn(id, { status: "error", error: error.message });
     }
   }
@@ -123,7 +213,12 @@ export default function App() {
 
   return (
     <div className="app">
-      <Sidebar documents={documents} onUploaded={loadDocuments} />
+      <Sidebar
+        documents={documents}
+        onUploaded={loadDocuments}
+        canEdit={role === "admin"}
+        account={authRequired && { role, onSignOut }}
+      />
 
       <main className="main">
         <div className="topbar">
@@ -178,7 +273,7 @@ function ServerNotice({ health }) {
   return null;
 }
 
-function Sidebar({ documents, onUploaded }) {
+function Sidebar({ documents, onUploaded, canEdit, account }) {
   const [uploads, setUploads] = useState([]);
   const [dragging, setDragging] = useState(false);
   const input = useRef(null);
@@ -241,20 +336,20 @@ function Sidebar({ documents, onUploaded }) {
             {documents.map((doc) => (
               <li key={doc.source}>
                 <span className="doc-name">{doc.source}</span>
-                <button
+                {canEdit && <button
                   className="remove-button"
                   aria-label={`Remove ${doc.source}`}
                   onClick={() => remove(doc.source)}
                 >
                   Remove
-                </button>
+                </button>}
               </li>
             ))}
           </ul>
         )}
       </section>
 
-      <section>
+      {canEdit && <section>
         <button
           className={`dropzone${dragging ? " is-dragging" : ""}`}
           onClick={() => input.current.click()}
@@ -296,7 +391,18 @@ function Sidebar({ documents, onUploaded }) {
             ))}
           </ul>
         )}
-      </section>
+      </section>}
+
+      {account && (
+        <div className="account">
+          <p className="muted">
+            Signed in as {account.role === "admin" ? "an admin" : "an employee"}
+          </p>
+          <button className="quiet-button" onClick={account.onSignOut}>
+            Sign out
+          </button>
+        </div>
+      )}
     </aside>
   );
 }

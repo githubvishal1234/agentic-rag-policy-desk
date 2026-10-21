@@ -21,6 +21,9 @@ def embedding_service() -> EmbeddingService:
 @pytest.fixture
 def client(tmp_path, monkeypatch, embedding_service):
     monkeypatch.setattr(main, "DATA_DIR", tmp_path)
+    # Sign-in off unless a test turns it on.
+    monkeypatch.delenv("POLICY_DESK_PASSWORD", raising=False)
+    monkeypatch.delenv("POLICY_DESK_ADMIN_PASSWORD", raising=False)
     monkeypatch.setattr(main, "EmbeddingService", lambda: embedding_service)
     monkeypatch.setattr(main, "has_credentials", lambda: True)
     monkeypatch.setattr(

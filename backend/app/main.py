@@ -1,3 +1,5 @@
+import os
+import secrets
 import shutil
 import sqlite3
 from collections import Counter
@@ -7,12 +9,15 @@ from threading import Lock
 from uuid import uuid4
 
 import anthropic
-from fastapi import FastAPI, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, HTTPException, UploadFile
 from fastapi.staticfiles import StaticFiles
 from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.errors import GraphRecursionError
 from pydantic import BaseModel, ConfigDict, Field
+from starlette.middleware.sessions import SessionMiddleware
 
+from app.core import auth
+from app.core.auth import require_admin, require_user
 from app.agents.rag_agent import build_agent, conversation_turns, summarize_turn
 from app.rag.generator import generate_answer, has_credentials
 from app.services.embedding_service import EmbeddingService
@@ -55,6 +60,17 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# Signed session cookie (HTTP-only). Without POLICY_DESK_SECRET a random key
+# is used, so everyone is signed out whenever the server restarts.
+app.add_middleware(
+    SessionMiddleware,
+    secret_key=os.environ.get("POLICY_DESK_SECRET") or secrets.token_urlsafe(32),
+    same_site="lax",
+    https_only=os.environ.get("POLICY_DESK_HTTPS_ONLY") == "1",
+    max_age=8 * 60 * 60,
+)
+app.include_router(auth.router)
+
 
 class QueryRequest(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True)
@@ -76,6 +92,7 @@ def health_check():
         "status": "healthy",
         "service": "enterprise-agentic-rag",
         "llm_configured": has_credentials(),
+        "auth_required": auth.auth_required(),
     }
 
 
@@ -88,7 +105,7 @@ def require_credentials() -> None:
         )
 
 
-@app.get("/documents")
+@app.get("/documents", dependencies=[Depends(require_user)])
 def documents():
     with store_lock:
         counts = Counter(
@@ -102,7 +119,7 @@ def documents():
     ]
 
 
-@app.post("/ingest")
+@app.post("/ingest", dependencies=[Depends(require_admin)])
 def ingest(file: UploadFile):
     # Keep only the base name so uploads cannot escape the documents folder.
     file_name = Path(file.filename or "").name
@@ -135,7 +152,7 @@ def ingest(file: UploadFile):
     return {"source": file_name, "chunks": len(chunks)}
 
 
-@app.delete("/documents/{source}")
+@app.delete("/documents/{source}", dependencies=[Depends(require_admin)])
 def delete_document(source: str):
     store = app.state.store
 
@@ -157,7 +174,7 @@ def delete_document(source: str):
     return {"source": source, "removed_chunks": removed}
 
 
-@app.post("/query")
+@app.post("/query", dependencies=[Depends(require_user)])
 def query(request: QueryRequest):
     with store_lock:
         chunks = app.state.store.hybrid_search(
@@ -188,7 +205,7 @@ def query(request: QueryRequest):
     }
 
 
-@app.post("/chat")
+@app.post("/chat", dependencies=[Depends(require_user)])
 def chat(request: ChatRequest):
     require_credentials()
     thread_id = request.thread_id or str(uuid4())
@@ -207,7 +224,7 @@ def chat(request: ChatRequest):
 
 
 
-@app.get("/chat/{thread_id}")
+@app.get("/chat/{thread_id}", dependencies=[Depends(require_user)])
 def chat_history(thread_id: str):
     state = app.state.agent.get_state({"configurable": {"thread_id": thread_id}})
     messages = state.values.get("messages", [])

@@ -10,6 +10,9 @@ export default defineConfig({
   server: {
     proxy: {
       "/health": api,
+      "/me": api,
+      "/login": api,
+      "/logout": api,
       "/documents": api,
       "/ingest": api,
       "/chat": api, // also /chat/<thread_id> for history

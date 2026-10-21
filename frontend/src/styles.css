@@ -246,6 +246,72 @@ code {
   border-left: 3px solid var(--error);
 }
 
+.account {
+  display: grid;
+  gap: 8px;
+  justify-items: start;
+  margin-top: auto;
+}
+
+/* Sign-in */
+
+.signin {
+  display: grid;
+  place-items: center;
+  min-height: 100dvh;
+  padding: 16px;
+}
+
+.signin-form {
+  display: grid;
+  gap: 10px;
+  width: min(100%, 360px);
+  padding: 32px;
+  background: var(--surface);
+  border-radius: 8px;
+}
+
+.signin-form h1 {
+  margin: 12px 0 0;
+  font-size: 28px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.signin-form .muted {
+  margin: 0 0 8px;
+  font-size: 15px;
+}
+
+.signin-form label {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.signin-form input {
+  height: 44px;
+  padding: 0 12px;
+  font: inherit;
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+}
+
+.signin-form input:focus-visible {
+  outline: 2px solid var(--action);
+  outline-offset: 0;
+  border-color: var(--action);
+}
+
+.signin-error {
+  margin: 0;
+  font-size: 14px;
+  color: var(--error);
+}
+
+.signin-form .ask-button {
+  margin-top: 8px;
+}
+
 /* Empty state */
 
 .welcome {

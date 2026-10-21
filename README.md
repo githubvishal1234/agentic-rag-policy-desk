@@ -44,6 +44,20 @@ curl -X POST http://localhost:8000/chat -H "Content-Type: application/json" -d '
 | `DELETE /documents/{name}` | Remove a file and its chunks from the index |
 | `GET /health` | Health check; `llm_configured` says whether an API key is set |
 
+## Sign-in
+
+Off by default. Set passwords on the server to require sign-in:
+
+| Variable | Effect |
+|---|---|
+| `POLICY_DESK_PASSWORD` | Employees: ask questions, read conversations |
+| `POLICY_DESK_ADMIN_PASSWORD` | Admins: also add and remove documents |
+| `POLICY_DESK_SECRET` | Key that signs session cookies. Set it, or everyone is signed out on each restart |
+| `POLICY_DESK_HTTPS_ONLY=1` | Send the cookie over HTTPS only (use in production) |
+
+Sessions last 8 hours. Wrong passwords are slowed down, but there is no
+lockout, so put the app behind a VPN or proxy before exposing it publicly.
+
 ## Frontend
 
 Policy Desk, a React app in `frontend/`: upload documents, ask questions
