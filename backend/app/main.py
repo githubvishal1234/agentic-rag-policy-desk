@@ -1,3 +1,4 @@
+import shutil
 import sqlite3
 from collections import Counter
 from contextlib import asynccontextmanager
@@ -132,6 +133,28 @@ def ingest(file: UploadFile):
         store.save(str(DATA_DIR / "vectorstore"))
 
     return {"source": file_name, "chunks": len(chunks)}
+
+
+@app.delete("/documents/{source}")
+def delete_document(source: str):
+    store = app.state.store
+
+    with store_lock:
+        removed = store.remove_source(source)
+
+        if not removed:
+            raise HTTPException(404, f"{source} is not in the knowledge base")
+
+        vectorstore_dir = DATA_DIR / "vectorstore"
+        if store.documents:
+            store.save(str(vectorstore_dir))
+        else:
+            shutil.rmtree(vectorstore_dir, ignore_errors=True)
+
+        # Base name only, as in /ingest, so this can't reach outside the folder.
+        (DATA_DIR / "documents" / Path(source).name).unlink(missing_ok=True)
+
+    return {"source": source, "removed_chunks": removed}
 
 
 @app.post("/query")

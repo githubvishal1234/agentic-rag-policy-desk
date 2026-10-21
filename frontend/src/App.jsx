@@ -209,6 +209,19 @@ function Sidebar({ documents, onUploaded }) {
     onUploaded();
   }
 
+  async function remove(source) {
+    if (!window.confirm(`Remove ${source}? Answers will no longer use it.`)) return;
+
+    try {
+      await request(`/documents/${encodeURIComponent(source)}`, { method: "DELETE" });
+      setUploads([{ name: source, state: "Removed" }]);
+    } catch (error) {
+      setUploads([{ name: source, state: error.message }]);
+    }
+
+    onUploaded();
+  }
+
   return (
     <aside className="sidebar">
       <div>
@@ -226,7 +239,16 @@ function Sidebar({ documents, onUploaded }) {
         ) : (
           <ul className="doc-list">
             {documents.map((doc) => (
-              <li key={doc.source}>{doc.source}</li>
+              <li key={doc.source}>
+                <span className="doc-name">{doc.source}</span>
+                <button
+                  className="remove-button"
+                  aria-label={`Remove ${doc.source}`}
+                  onClick={() => remove(doc.source)}
+                >
+                  Remove
+                </button>
+              </li>
             ))}
           </ul>
         )}

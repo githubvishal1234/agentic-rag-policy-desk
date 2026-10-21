@@ -108,6 +108,33 @@ class FaissVectorStore:
         self.documents.extend(documents)
         self._rebuild_keyword_index()
 
+    def remove_source(self, source: str) -> int:
+        """Remove every chunk from one source file; return how many."""
+
+        indices = [
+            index
+            for index, document in enumerate(self.documents)
+            if document.metadata["source"] == source
+        ]
+
+        if not indices:
+            return 0
+
+        # IndexFlat compacts in place and keeps the remaining vectors in
+        # order, so they stay aligned with self.documents.
+        self.index.remove_ids(np.asarray(indices, dtype=np.int64))
+        self.documents = [
+            document
+            for document in self.documents
+            if document.metadata["source"] != source
+        ]
+
+        if not self.documents:
+            self.index = None
+
+        self._rebuild_keyword_index()
+        return len(indices)
+
     def _validate_search(self, query: str, k: int) -> None:
         if not query.strip():
             raise ValueError("Query cannot be empty")

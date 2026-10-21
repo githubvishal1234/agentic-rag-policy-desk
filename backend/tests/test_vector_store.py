@@ -64,3 +64,32 @@ def test_hybrid_search_reloads_keyword_index(all_samples_store, tmp_path):
 
     query = "lost laptop"
     assert restored.hybrid_search(query) == all_samples_store.hybrid_search(query)
+
+
+def test_remove_source(all_samples_store):
+    before = len(all_samples_store.documents)
+    it_chunks = sum(
+        d.metadata["source"] == "company_it_policy.txt"
+        for d in all_samples_store.documents
+    )
+
+    assert all_samples_store.remove_source("company_it_policy.txt") == it_chunks
+    assert all_samples_store.remove_source("company_it_policy.txt") == 0
+    assert all_samples_store.index.ntotal == len(all_samples_store.documents) == before - it_chunks
+
+    # Remaining vectors still line up with their texts after compaction.
+    results = all_samples_store.hybrid_search("annual leave", k=4)
+    assert all(r["metadata"]["source"] != "company_it_policy.txt" for r in results)
+    assert "leave" in results[0]["text"].lower()
+    top = all_samples_store.similarity_search(results[0]["text"], k=1)[0]
+    assert top["score"] > 0.99
+
+
+def test_remove_last_source_empties_store(docs_dir, embedding_service):
+    store = FaissVectorStore(embedding_service)
+    store.add_documents(ingest_file(str(docs_dir / "company_it_policy.txt")))
+
+    store.remove_source("company_it_policy.txt")
+
+    assert store.index is None
+    assert store.hybrid_search("VPN") == []

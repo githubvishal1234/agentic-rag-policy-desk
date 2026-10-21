@@ -85,3 +85,25 @@ def test_missing_api_key_returns_503(client, docs_dir, monkeypatch):
         assert response.status_code == 503
         assert "ANTHROPIC_API_KEY" in response.json()["detail"]
 
+
+
+def test_delete_document(client, docs_dir, tmp_path):
+    upload(client, docs_dir / "company_it_policy.txt")
+    upload(client, docs_dir / "leave_policy.pdf")
+
+    response = client.delete("/documents/company_it_policy.txt")
+
+    assert response.status_code == 200
+    assert response.json()["removed_chunks"] == 2
+    assert [d["source"] for d in client.get("/documents").json()] == ["leave_policy.pdf"]
+    assert not (tmp_path / "documents" / "company_it_policy.txt").exists()
+    assert client.delete("/documents/company_it_policy.txt").status_code == 404
+
+    # The removal is saved: a restarted app doesn't bring it back.
+    with TestClient(main.app) as restarted:
+        assert [d["source"] for d in restarted.get("/documents").json()] == ["leave_policy.pdf"]
+        restarted.delete("/documents/leave_policy.pdf")
+
+    assert not (tmp_path / "vectorstore").exists()
+    with TestClient(main.app) as restarted:
+        assert restarted.get("/documents").json() == []

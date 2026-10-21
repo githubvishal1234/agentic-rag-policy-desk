@@ -40,7 +40,9 @@ curl -X POST http://localhost:8000/chat -H "Content-Type: application/json" -d '
 | `POST /query` | `{"question", "k"}` → hybrid search (vector + BM25 keyword, fused with RRF), then an answer with citations plus the retrieved sources |
 | `POST /chat` | `{"message", "thread_id"?}` → LangGraph agent: Claude decides when and how often to search (`search_documents`, `list_documents` tools), remembers the conversation per `thread_id` (stored in `data/conversations.sqlite`, so it survives restarts), and answers with citations |
 | `GET /chat/{thread_id}` | The conversation so far, turn by turn |
-| `GET /health` | Health check |
+| `GET /documents` | Files in the knowledge base, with chunk counts |
+| `DELETE /documents/{name}` | Remove a file and its chunks from the index |
+| `GET /health` | Health check; `llm_configured` says whether an API key is set |
 
 ## Frontend
 

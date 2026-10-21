@@ -116,8 +116,43 @@ code {
 }
 
 .doc-list li {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  justify-content: space-between;
   padding: 5px 0;
+}
+
+.doc-name {
   overflow-wrap: anywhere;
+}
+
+/* Shown on hover or keyboard focus of its row, always on touch screens. */
+.remove-button {
+  flex-shrink: 0;
+  padding: 0 4px;
+  font-size: 13px;
+  color: var(--muted);
+  background: none;
+  border: none;
+  border-radius: 3px;
+  cursor: pointer;
+  opacity: 0;
+}
+
+.doc-list li:hover .remove-button,
+.remove-button:focus-visible {
+  opacity: 1;
+}
+
+.remove-button:hover {
+  color: var(--error);
+}
+
+@media (hover: none) {
+  .remove-button {
+    opacity: 1;
+  }
 }
 
 .dropzone {
