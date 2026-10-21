@@ -1,0 +1,21 @@
+COMPANY IT POLICY
+
+1. Password Policy
+
+Employees must use strong passwords and must not share passwords with other employees.
+
+Passwords should be changed according to the company's security requirements.
+
+2. Device Security
+
+Company laptops must use approved security software.
+
+Employees must report lost or stolen devices to the IT department immediately.
+
+3. Remote Access
+
+Employees accessing company systems remotely must use the approved VPN.
+
+4. Data Protection
+
+Confidential company information must not be shared with unauthorized individuals.

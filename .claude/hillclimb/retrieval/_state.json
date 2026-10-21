@@ -1,0 +1,11 @@
+{
+  "flow": "retrieval",
+  "metrics": [
+    {"id": "hit", "label": "Evidence hit", "kind": "binary"},
+    {"id": "recall", "label": "Recall@k", "kind": "float", "scale": 1},
+    {"id": "mrr", "label": "MRR", "kind": "float", "scale": 1}
+  ],
+  "perf_fields": [
+    {"id": "latency_s", "label": "Search time", "unit": "s"}
+  ]
+}

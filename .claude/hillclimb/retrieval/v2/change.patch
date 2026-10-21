@@ -1,0 +1,31 @@
+--- a/backend/app/services/bm25.py
++++ b/backend/app/services/bm25.py
+@@ -3,8 +3,27 @@
+ from collections import Counter
+ 
+ 
++# Function words carry no topic. Without this list, questions like "Can I
++# ... on a trip?" keyword-match random chunks on "can", "a" and "on", and
++# rank fusion counts those matches as much as a real keyword hit.
++STOPWORDS = frozenset(
++    "a about above after again all an and any are as at be because been "
++    "before being below between both but by can could did do does doing "
++    "down during each few for from further had has have having he her here "
++    "hers him his how i if in into is it its just me more most my no nor "
++    "not of off on once only or other our ours out over own same she should "
++    "so some such than that the their them then there these they this those "
++    "through to too under until up very was we were what when where which "
++    "while who whom why will with would you your yours".split()
++)
++
++
+ def tokenize(text: str) -> list[str]:
+-    return re.findall(r"\w+", text.lower())
++    return [
++        token
++        for token in re.findall(r"\w+", text.lower())
++        if token not in STOPWORDS
++    ]
+ 
+ 
+ class BM25:

@@ -1,0 +1,30 @@
+ALDERMERE SYSTEMS - INFORMATION SECURITY POLICY
+Version 4.2, owned by the Information Security Office (ISO)
+
+1. Passwords and Sign-In
+
+All accounts must use a password of at least 14 characters. Passwords are not rotated on a schedule; they must be changed immediately if there is any sign they have been exposed. Password managers approved by IT may be used.
+
+Multi-factor authentication (MFA) through the Keyguard app is mandatory for email, the HR portal and all remote access. Hardware security keys are issued to administrators and finance staff.
+
+2. Devices
+
+Company laptops are encrypted and managed by IT. Employees must not disable the endpoint protection agent or install unapproved software.
+
+A lost or stolen laptop, phone or security key must be reported to the Service Desk within 2 hours, by phone on extension 4400 or through the portal. Personal phones may access company email only after enrolling in device management.
+
+3. Removable Media
+
+USB storage devices are blocked by default. An exception for an encrypted drive can be requested with form SEC-11 and must be renewed every 6 months.
+
+4. Remote Access
+
+Remote connections to internal systems must go through the NetGate VPN. Public Wi-Fi may be used only while the VPN is connected. Split tunnelling is not permitted.
+
+5. Phishing and Incidents
+
+Suspicious emails should be reported with the Report Phish button in the mail client, not forwarded. Any suspected security incident, including accidentally sending Confidential data to the wrong person, must be reported to the ISO within 24 hours.
+
+6. Data Classification
+
+Information is classified as Public, Internal, Confidential or Restricted. Restricted data, such as salary records, health information and code signing keys, may only be stored in the Vault document system and must never be sent by email.

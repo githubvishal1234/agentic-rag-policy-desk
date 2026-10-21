@@ -1,0 +1,21 @@
+{
+  "flow": "answers",
+  "metrics": [
+    {"id": "pass", "label": "Pass", "kind": "binary"},
+    {"id": "correct", "label": "Facts correct", "kind": "binary"},
+    {"id": "cited", "label": "Cited source", "kind": "binary"},
+    {"id": "abstained", "label": "Abstained", "kind": "binary"},
+    {"id": "facts", "label": "Fact recall", "kind": "float", "scale": 1}
+  ],
+  "perf_fields": [
+    {"id": "latency_s", "label": "Latency", "unit": "s"},
+    {"id": "tool_calls", "label": "Tool calls"},
+    {"id": "in_tokens", "label": "Input tok"},
+    {"id": "out_tokens", "label": "Output tok"},
+    {"id": "cost_usd", "label": "Cost", "unit": "$"}
+  ],
+  "prices": {
+    "claude-opus-5-5": {"in": 4.0, "out": 20.0},
+    "claude-haiku-5-5": {"in": 0.1, "out": 0.5}
+  }
+}

@@ -1,0 +1,463 @@
+import { useEffect, useRef, useState } from "react";
+import ReactMarkdown from "react-markdown";
+
+const STARTER_QUESTIONS = [
+  "How many days of annual leave do I get?",
+  "What should I do if my laptop is lost or stolen?",
+  "Who needs to approve a large expense claim?",
+];
+
+const listFormat = new Intl.ListFormat("en", { type: "conjunction" });
+
+// The current conversation's id, so a reload picks it back up. Storage can
+// be unavailable (private windows, blocked site data); then we just forget.
+const THREAD_KEY = "policy-desk-thread";
+
+function savedThread() {
+  try {
+    return localStorage.getItem(THREAD_KEY);
+  } catch {
+    return null;
+  }
+}
+
+function saveThread(threadId) {
+  try {
+    if (threadId) localStorage.setItem(THREAD_KEY, threadId);
+    else localStorage.removeItem(THREAD_KEY);
+  } catch {
+    // Not saved; the conversation still works until the page closes.
+  }
+}
+
+async function request(path, options) {
+  const response = await fetch(path, options);
+  const body = await response.json().catch(() => null);
+
+  if (!response.ok) {
+    const error = new Error(
+      typeof body?.detail === "string"
+        ? body.detail
+        : `The server returned an error (${response.status}).`,
+    );
+    error.status = response.status;
+    throw error;
+  }
+
+  return body;
+}
+
+export default function App() {
+  // undefined while loading, null when the server can't be reached.
+  const [health, setHealth] = useState(undefined);
+  const [documents, setDocuments] = useState([]);
+  const [turns, setTurns] = useState([]);
+  const [threadId, setThreadId] = useState(savedThread);
+
+  const loadDocuments = () =>
+    request("/documents").then(setDocuments).catch(() => {});
+
+  useEffect(() => {
+    request("/health").then(setHealth).catch(() => setHealth(null));
+    loadDocuments();
+
+    const saved = savedThread();
+    if (saved) {
+      request(`/chat/${encodeURIComponent(saved)}`)
+        .then((history) =>
+          setTurns(
+            history.turns.map((result) => ({
+              id: crypto.randomUUID(),
+              question: result.question,
+              status: "done",
+              result,
+            })),
+          ),
+        )
+        .catch((error) => {
+          // The server no longer has it (e.g. its data was cleared).
+          if (error.status === 404) {
+            saveThread(null);
+            setThreadId(null);
+          }
+        });
+    }
+  }, []);
+
+  const updateTurn = (id, changes) =>
+    setTurns((all) =>
+      all.map((turn) => (turn.id === id ? { ...turn, ...changes } : turn)),
+    );
+
+  async function ask(question) {
+    const id = crypto.randomUUID();
+    setTurns((all) => [...all, { id, question, status: "pending" }]);
+
+    try {
+      const result = await request("/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message: question, thread_id: threadId }),
+      });
+      setThreadId(result.thread_id);
+      saveThread(result.thread_id);
+      updateTurn(id, { status: "done", result });
+    } catch (error) {
+      updateTurn(id, { status: "error", error: error.message });
+    }
+  }
+
+  function retry(turn) {
+    setTurns((all) => all.filter((other) => other.id !== turn.id));
+    ask(turn.question);
+  }
+
+  function startOver() {
+    setTurns([]);
+    setThreadId(null);
+    saveThread(null);
+  }
+
+  const busy = turns.some((turn) => turn.status === "pending");
+  const canAsk = Boolean(health?.llm_configured) && documents.length > 0;
+
+  return (
+    <div className="app">
+      <Sidebar documents={documents} onUploaded={loadDocuments} />
+
+      <main className="main">
+        <div className="topbar">
+          {turns.length > 0 && (
+            <button className="quiet-button" onClick={startOver} disabled={busy}>
+              New conversation
+            </button>
+          )}
+        </div>
+
+        <section className="conversation" aria-live="polite">
+          <ServerNotice health={health} />
+
+          {turns.length === 0 ? (
+            <Welcome
+              hasDocuments={documents.length > 0}
+              canAsk={canAsk}
+              onAsk={ask}
+            />
+          ) : (
+            turns.map((turn) => (
+              <Turn key={turn.id} turn={turn} onRetry={() => retry(turn)} />
+            ))
+          )}
+        </section>
+
+        <Composer onAsk={ask} disabled={busy || !canAsk} />
+      </main>
+    </div>
+  );
+}
+
+function ServerNotice({ health }) {
+  if (health === null) {
+    return (
+      <p className="notice" role="alert">
+        Can't reach the server. Start it from the <code>backend</code> folder
+        with <code>uvicorn app.main:app</code>, then reload this page.
+      </p>
+    );
+  }
+
+  if (health && !health.llm_configured) {
+    return (
+      <p className="notice" role="alert">
+        Answers are off until the server has an Anthropic API key. Set{" "}
+        <code>ANTHROPIC_API_KEY</code> and restart the server.
+      </p>
+    );
+  }
+
+  return null;
+}
+
+function Sidebar({ documents, onUploaded }) {
+  const [uploads, setUploads] = useState([]);
+  const [dragging, setDragging] = useState(false);
+  const input = useRef(null);
+
+  async function upload(files) {
+    if (!files.length) return;
+
+    setUploads(files.map((file) => ({ name: file.name, state: "Adding…" })));
+
+    // One at a time: the server indexes files sequentially anyway.
+    for (const [index, file] of files.entries()) {
+      const form = new FormData();
+      form.append("file", file);
+
+      let state;
+      try {
+        await request("/ingest", { method: "POST", body: form });
+        state = "Added";
+      } catch (error) {
+        state = error.status === 409 ? "Already added" : error.message;
+      }
+
+      setUploads((all) =>
+        all.map((item, i) => (i === index ? { ...item, state } : item)),
+      );
+    }
+
+    onUploaded();
+  }
+
+  return (
+    <aside className="sidebar">
+      <div>
+        <p className="brand">Policy Desk</p>
+        <p className="brand-note">Answers from your company's documents</p>
+      </div>
+
+      <section aria-labelledby="documents-heading">
+        <h2 id="documents-heading">
+          Documents{documents.length > 0 && ` (${documents.length})`}
+        </h2>
+
+        {documents.length === 0 ? (
+          <p className="muted">No documents yet.</p>
+        ) : (
+          <ul className="doc-list">
+            {documents.map((doc) => (
+              <li key={doc.source}>{doc.source}</li>
+            ))}
+          </ul>
+        )}
+      </section>
+
+      <section>
+        <button
+          className={`dropzone${dragging ? " is-dragging" : ""}`}
+          onClick={() => input.current.click()}
+          onDragOver={(event) => {
+            event.preventDefault();
+            setDragging(true);
+          }}
+          onDragLeave={() => setDragging(false)}
+          onDrop={(event) => {
+            event.preventDefault();
+            setDragging(false);
+            upload([...event.dataTransfer.files]);
+          }}
+        >
+          <span className="dropzone-title">Add documents</span>
+          <span className="dropzone-hint">
+            Drop files here or choose them. Text, PDF or Word.
+          </span>
+        </button>
+        <input
+          ref={input}
+          type="file"
+          accept=".txt,.pdf,.docx"
+          multiple
+          hidden
+          onChange={(event) => {
+            upload([...event.target.files]);
+            event.target.value = "";
+          }}
+        />
+
+        {uploads.length > 0 && (
+          <ul className="upload-list" aria-live="polite">
+            {uploads.map((item) => (
+              <li key={item.name}>
+                <span className="upload-name">{item.name}</span>
+                <span className="muted">{item.state}</span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+    </aside>
+  );
+}
+
+function Welcome({ hasDocuments, canAsk, onAsk }) {
+  return (
+    <div className="welcome">
+      <h1>Ask about any company policy</h1>
+      <p className="welcome-lead">
+        Every answer quotes the passage it comes from, so you can check it
+        yourself.
+      </p>
+
+      {!hasDocuments ? (
+        <p className="muted">Add your policy documents on the left to start.</p>
+      ) : (
+        <ul className="starters">
+          {STARTER_QUESTIONS.map((question) => (
+            <li key={question}>
+              <button
+                className="starter"
+                onClick={() => onAsk(question)}
+                disabled={!canAsk}
+              >
+                {question}
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+function Turn({ turn, onRetry }) {
+  const ref = useRef(null);
+
+  useEffect(() => {
+    ref.current.scrollIntoView({ block: "start" });
+  }, [turn.status]);
+
+  return (
+    <article className="turn" ref={ref}>
+      <h2 className="question">{turn.question}</h2>
+
+      {turn.status === "pending" && (
+        <p className="pending" role="status">
+          <span>Searching the documents</span>
+        </p>
+      )}
+
+      {turn.status === "error" && (
+        <div className="turn-error" role="alert">
+          <p>Couldn't get an answer. {turn.error}</p>
+          <button className="quiet-button" onClick={onRetry}>
+            Try again
+          </button>
+        </div>
+      )}
+
+      {turn.status === "done" && <Answer id={turn.id} result={turn.result} />}
+    </article>
+  );
+}
+
+// Puts a [n](#cite-n) link after each cited segment, before its trailing
+// whitespace, so the markdown flows as one text with markers inline.
+function withMarkers(segments) {
+  return segments
+    .map(({ text, citations }) => {
+      if (!citations.length) return text;
+
+      const trailing = text.match(/\s*$/)[0];
+      const markers = citations
+        .map((index) => `[${index + 1}](#cite-${index + 1})`)
+        .join("");
+      return text.slice(0, text.length - trailing.length) + markers + trailing;
+    })
+    .join("");
+}
+
+function Answer({ id, result }) {
+  const [active, setActive] = useState(null);
+
+  const searches = result.tool_calls
+    .filter((call) => call.name === "search_documents")
+    .map((call) => `“${call.input.query}”`);
+
+  const markdownComponents = {
+    a({ href, children }) {
+      if (href?.startsWith("#cite-")) {
+        const number = Number(href.slice(6));
+        return (
+          <sup>
+            <a
+              className="marker"
+              href={`#${id}-source-${number}`}
+              aria-label={`Source ${number}`}
+              onMouseEnter={() => setActive(number)}
+              onMouseLeave={() => setActive(null)}
+              onFocus={() => setActive(number)}
+              onBlur={() => setActive(null)}
+            >
+              {number}
+            </a>
+          </sup>
+        );
+      }
+
+      return (
+        <a href={href} target="_blank" rel="noreferrer">
+          {children}
+        </a>
+      );
+    },
+  };
+
+  return (
+    <>
+      {searches.length > 0 && (
+        <p className="searched">Searched for {listFormat.format(searches)}</p>
+      )}
+
+      <div className={`answer-layout${result.citations.length ? "" : " no-sources"}`}>
+        <div className="answer">
+          <ReactMarkdown components={markdownComponents}>
+            {withMarkers(result.segments)}
+          </ReactMarkdown>
+        </div>
+
+        {result.citations.length > 0 && (
+          <ol className="sources" aria-label="Sources">
+            {result.citations.map((citation, index) => (
+              <li
+                key={index}
+                id={`${id}-source-${index + 1}`}
+                className={`source${active === index + 1 ? " is-active" : ""}`}
+              >
+                <span className="source-number">{index + 1}</span>
+                <p className="source-quote">
+                  <mark>{citation.cited_text.trim()}</mark>
+                </p>
+                <p className="source-title">{citation.title ?? citation.source}</p>
+              </li>
+            ))}
+          </ol>
+        )}
+      </div>
+    </>
+  );
+}
+
+function Composer({ onAsk, disabled }) {
+  const [text, setText] = useState("");
+
+  function submit(event) {
+    event.preventDefault();
+    const question = text.trim();
+    if (!question || disabled) return;
+    onAsk(question);
+    setText("");
+  }
+
+  return (
+    <form className="composer" onSubmit={submit}>
+      <div className="composer-inner">
+        <label htmlFor="question" className="visually-hidden">
+          Your question
+        </label>
+        <textarea
+          id="question"
+          rows={1}
+          value={text}
+          placeholder="Ask a question about a policy"
+          onChange={(event) => setText(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter" && !event.shiftKey) submit(event);
+          }}
+        />
+        <button className="ask-button" type="submit" disabled={disabled || !text.trim()}>
+          Ask
+        </button>
+      </div>
+    </form>
+  );
+}

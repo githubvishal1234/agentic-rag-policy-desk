@@ -1,0 +1,23 @@
+ALDERMERE SYSTEMS - DATA RETENTION POLICY
+
+1. Purpose
+
+Information must be kept only as long as it is needed for business or legal reasons, and then destroyed securely.
+
+2. Retention Periods
+
+Customer contracts are kept for 7 years after the contract ends. Invoices and accounting records are kept for 10 years. Records of unsuccessful job applicants are deleted 6 months after the hiring decision.
+
+Emails are automatically deleted after 3 years unless they are filed to a project folder. System and security logs are retained for 13 months.
+
+3. Legal Hold
+
+When Legal issues a legal hold notice, all related records must be preserved, even if their retention period has ended. Deleting records under a legal hold is a serious disciplinary offence.
+
+4. Secure Disposal
+
+Paper documents are destroyed in the locked shredding bins on every floor. Old laptops and drives are returned to IT, which wipes and certifies them before disposal.
+
+5. Storage Locations
+
+Confidential records are stored in the approved document management system. Restricted records must be stored in Vault, as required by the Information Security Policy.

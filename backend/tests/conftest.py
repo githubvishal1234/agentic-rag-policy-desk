@@ -1,0 +1,33 @@
+from pathlib import Path
+
+import pytest
+from fastapi.testclient import TestClient
+
+from app import main
+from app.services.embedding_service import EmbeddingService
+
+
+@pytest.fixture
+def docs_dir() -> Path:
+    return Path(__file__).resolve().parents[2] / "data" / "sample"
+
+
+@pytest.fixture(scope="session")
+def embedding_service() -> EmbeddingService:
+    # Loading the model is slow, so share one instance across tests.
+    return EmbeddingService()
+
+
+@pytest.fixture
+def client(tmp_path, monkeypatch, embedding_service):
+    monkeypatch.setattr(main, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(main, "EmbeddingService", lambda: embedding_service)
+    monkeypatch.setattr(main, "has_credentials", lambda: True)
+    monkeypatch.setattr(
+        main,
+        "generate_answer",
+        lambda question, chunks: {"answer": "stub answer", "citations": []},
+    )
+
+    with TestClient(main.app) as client:
+        yield client
