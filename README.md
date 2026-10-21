@@ -59,6 +59,18 @@ npm run dev          # http://localhost:5173, proxies API calls to :8000
 For a single server, run `npm run build`; FastAPI then serves the built app
 from `frontend/dist` at http://localhost:8000.
 
+## Docker
+
+One image with the backend and the built frontend:
+
+```bash
+docker build -t policy-desk .
+docker run -p 8000:8000 -e ANTHROPIC_API_KEY=sk-ant-... -v policy-desk-data:/app/data policy-desk
+```
+
+Open http://localhost:8000. Documents, the index and conversations persist in
+the `policy-desk-data` volume.
+
 ## Tests
 
 ```bash
