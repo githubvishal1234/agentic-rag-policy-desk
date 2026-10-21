@@ -30,6 +30,27 @@ function saveThread(threadId) {
   }
 }
 
+// Conversations started in this browser, newest first: [{ id, title }].
+// Kept per browser, not on the server, because everyone shares a password.
+const HISTORY_KEY = "policy-desk-history";
+
+function loadHistory() {
+  try {
+    return JSON.parse(localStorage.getItem(HISTORY_KEY)) ?? [];
+  } catch {
+    return [];
+  }
+}
+
+function storeHistory(history) {
+  try {
+    if (history.length) localStorage.setItem(HISTORY_KEY, JSON.stringify(history));
+    else localStorage.removeItem(HISTORY_KEY);
+  } catch {
+    // Not saved; the list still works until the page closes.
+  }
+}
+
 async function request(path, options) {
   const response = await fetch(path, options);
   const body = await response.json().catch(() => null);
@@ -67,6 +88,7 @@ export default function App() {
   async function signOut() {
     await request("/logout", { method: "POST" }).catch(() => {});
     saveThread(null);
+    storeHistory([]);
     setMe({ ...me, role: null });
   }
 
@@ -140,6 +162,15 @@ function Workspace({ role, authRequired, onSignOut, onExpired }) {
   const [documents, setDocuments] = useState([]);
   const [turns, setTurns] = useState([]);
   const [threadId, setThreadId] = useState(savedThread);
+  const [history, setHistory] = useState(loadHistory);
+
+  function updateHistory(change) {
+    setHistory((current) => {
+      const next = change(current);
+      storeHistory(next);
+      return next;
+    });
+  }
 
   const loadDocuments = () =>
     request("/documents")
@@ -151,27 +182,31 @@ function Workspace({ role, authRequired, onSignOut, onExpired }) {
     loadDocuments();
 
     const saved = savedThread();
-    if (saved) {
-      request(`/chat/${encodeURIComponent(saved)}`)
-        .then((history) =>
-          setTurns(
-            history.turns.map((result) => ({
-              id: crypto.randomUUID(),
-              question: result.question,
-              status: "done",
-              result,
-            })),
-          ),
-        )
-        .catch((error) => {
-          // The server no longer has it (e.g. its data was cleared).
-          if (error.status === 404) {
-            saveThread(null);
-            setThreadId(null);
-          }
-        });
-    }
+    if (saved) openConversation(saved);
   }, []);
+
+  async function openConversation(id) {
+    try {
+      const conversation = await request(`/chat/${encodeURIComponent(id)}`);
+      setTurns(
+        conversation.turns.map((result) => ({
+          id: crypto.randomUUID(),
+          question: result.question,
+          status: "done",
+          result,
+        })),
+      );
+      setThreadId(id);
+      saveThread(id);
+    } catch (error) {
+      if (error.status === 401) return onExpired();
+      // The server no longer has it (e.g. its data was cleared).
+      if (error.status === 404) {
+        updateHistory((current) => current.filter((item) => item.id !== id));
+        if (id === threadId) startOver();
+      }
+    }
+  }
 
   const updateTurn = (id, changes) =>
     setTurns((all) =>
@@ -190,6 +225,12 @@ function Workspace({ role, authRequired, onSignOut, onExpired }) {
       });
       setThreadId(result.thread_id);
       saveThread(result.thread_id);
+      updateHistory((current) => {
+        const existing = current.find((item) => item.id === result.thread_id);
+        const entry = existing ?? { id: result.thread_id, title: question };
+        // Most recently used first; keep the list short.
+        return [entry, ...current.filter((item) => item !== existing)].slice(0, 20);
+      });
       updateTurn(id, { status: "done", result });
     } catch (error) {
       if (error.status === 401) onExpired();
@@ -217,6 +258,10 @@ function Workspace({ role, authRequired, onSignOut, onExpired }) {
         documents={documents}
         onUploaded={loadDocuments}
         canEdit={role === "admin"}
+        history={history}
+        currentThread={threadId}
+        onOpen={openConversation}
+        busy={busy}
         account={authRequired && { role, onSignOut }}
       />
 
@@ -273,7 +318,7 @@ function ServerNotice({ health }) {
   return null;
 }
 
-function Sidebar({ documents, onUploaded, canEdit, account }) {
+function Sidebar({ documents, onUploaded, canEdit, account, history, currentThread, onOpen, busy }) {
   const [uploads, setUploads] = useState([]);
   const [dragging, setDragging] = useState(false);
   const input = useRef(null);
@@ -323,6 +368,26 @@ function Sidebar({ documents, onUploaded, canEdit, account }) {
         <p className="brand">Policy Desk</p>
         <p className="brand-note">Answers from your company's documents</p>
       </div>
+
+      {history.length > 0 && (
+        <section aria-labelledby="history-heading">
+          <h2 id="history-heading">Recent conversations</h2>
+          <ul className="history-list">
+            {history.map((item) => (
+              <li key={item.id}>
+                <button
+                  className="history-item"
+                  aria-current={item.id === currentThread ? "true" : undefined}
+                  disabled={busy}
+                  onClick={() => onOpen(item.id)}
+                >
+                  {item.title}
+                </button>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
 
       <section aria-labelledby="documents-heading">
         <h2 id="documents-heading">
