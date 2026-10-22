@@ -18,6 +18,15 @@ SYSTEM_PROMPT = (
     "that you could not find it in the documents. Keep answers concise."
 )
 
+# Tool rounds allowed per question. Well under LangGraph's 25-step limit,
+# which would otherwise stop the graph on an unanswered tool call and leave
+# the saved conversation invalid for every later request.
+MAX_TOOL_ROUNDS = 6
+
+GAVE_UP_ANSWER = (
+    "I couldn't finish looking this up. Try asking a narrower question."
+)
+
 TOOLS = [
     {
         "name": "search_documents",
@@ -176,20 +185,57 @@ def build_agent(store: FaissVectorStore, store_lock: Lock, checkpointer=None):
         # tools in parallel.
         return {"messages": [{"role": "user", "content": results}]}
 
-    def has_tool_calls(state: AgentState) -> str:
-        content = state["messages"][-1]["content"]
+    def give_up(state: AgentState) -> dict:
+        # Answer the pending tool calls, then end the turn with a reply, so
+        # the history stays valid and the conversation can continue.
+        pending = [
+            {
+                "type": "tool_result",
+                "tool_use_id": block["id"],
+                "content": "Stopped: too many searches for one question.",
+                "is_error": True,
+            }
+            for block in state["messages"][-1]["content"]
+            if block["type"] == "tool_use"
+        ]
+        return {
+            "messages": [
+                {"role": "user", "content": pending},
+                {
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": GAVE_UP_ANSWER}],
+                },
+            ]
+        }
 
-        if any(block["type"] == "tool_use" for block in content):
-            return "tools"
+    def next_step(state: AgentState) -> str:
+        messages = state["messages"]
 
-        return END
+        if not any(block["type"] == "tool_use" for block in messages[-1]["content"]):
+            return END
+
+        turn_start = max(
+            index
+            for index, message in enumerate(messages)
+            if message["role"] == "user" and isinstance(message["content"], str)
+        )
+        rounds = sum(
+            1
+            for message in messages[turn_start:]
+            if message["role"] == "assistant"
+            and any(block["type"] == "tool_use" for block in message["content"])
+        )
+
+        return "tools" if rounds <= MAX_TOOL_ROUNDS else "give_up"
 
     graph = StateGraph(AgentState)
     graph.add_node("model", call_model)
     graph.add_node("tools", run_tools)
+    graph.add_node("give_up", give_up)
     graph.add_edge(START, "model")
-    graph.add_conditional_edges("model", has_tool_calls, ["tools", END])
+    graph.add_conditional_edges("model", next_step, ["tools", "give_up", END])
     graph.add_edge("tools", "model")
+    graph.add_edge("give_up", END)
 
     return graph.compile(checkpointer=checkpointer or InMemorySaver())
 

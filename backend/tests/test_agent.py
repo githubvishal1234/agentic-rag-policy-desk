@@ -349,3 +349,27 @@ def test_chat_stream_reports_llm_errors(client, monkeypatch):
     assert events[-1]["type"] == "error"
     assert "LLM request failed" in events[-1]["detail"]
 
+
+
+def test_endless_tool_calls_end_the_turn_cleanly(agent, claude):
+    # Claude keeps searching forever: one more reply than the cap allows.
+    claude.responses = [
+        reply(tool_use(f"toolu_{n}", "search_documents", {"query": f"try {n}"}), stop_reason="tool_use")
+        for n in range(rag_agent.MAX_TOOL_ROUNDS + 1)
+    ]
+
+    result = ask(agent, "Impossible question?")
+
+    assert result["answer"] == rag_agent.GAVE_UP_ANSWER
+    assert len(result["tool_calls"]) == rag_agent.MAX_TOOL_ROUNDS + 1
+    assert claude.responses == []
+
+    # The thread still works: every tool call in the history has a result.
+    claude.responses = [reply({"type": "text", "text": "Fine now."})]
+    assert ask(agent, "Something simple?")["answer"] == "Fine now."
+
+    history = claude.requests[-1]["messages"]
+    tool_ids = {b["id"] for m in history if m["role"] == "assistant" for b in m["content"] if b["type"] == "tool_use"}
+    result_ids = {b["tool_use_id"] for m in history if isinstance(m["content"], list) for b in m["content"] if b["type"] == "tool_result"}
+    assert tool_ids == result_ids
+    assert [m["role"] for m in history[-3:]] == ["user", "assistant", "user"]
