@@ -10,8 +10,8 @@
   --action-hover: #0b5555;
   --error: #b42318;
 
-  --font-ui: "Public Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
-  --font-read: "Literata", Georgia, "Times New Roman", serif;
+  --font-ui: "Public Sans Variable", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-read: "Literata Variable", Georgia, "Times New Roman", serif;
 
   color-scheme: light;
 }
