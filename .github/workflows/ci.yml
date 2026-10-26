@@ -1,0 +1,61 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+      # The embedding model the tests load (~90 MB), cached between runs.
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: hf-all-MiniLM-L6-v2
+      - name: Install dependencies
+        # CPU-only torch first: the default Linux wheel bundles CUDA (GBs).
+        run: |
+          pip install torch==2.14.1 --index-url https://download.pytorch.org/whl/cpu
+          pip install -r backend/requirements.txt
+      - name: Run tests
+        working-directory: backend
+        run: pytest -q
+
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+        working-directory: frontend
+      - run: npm run build
+        working-directory: frontend
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build image
+        run: docker build -t policy-desk .
+      - name: Start container and check it serves the API and the app
+        run: |
+          docker run -d --name policy-desk -p 8000:8000 policy-desk
+          for i in $(seq 1 60); do curl -sf localhost:8000/health && break; sleep 2; done
+          curl -sf localhost:8000/health | grep -q '"status":"healthy"'
+          curl -sf localhost:8000/ | grep -q "<title>Policy Desk</title>"
+          curl -sf localhost:8000/documents | grep -q '^\[\]$'
+      - name: Container logs
+        if: always()
+        run: docker logs policy-desk || true
