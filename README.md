@@ -1,4 +1,5 @@
 # Enterprise Agentic RAG Platform
+n[![CI](https://github.com/githubvishal1234/agentic-rag-policy-desk/actions/workflows/ci.yml/badge.svg)](https://github.com/githubvishal1234/agentic-rag-policy-desk/actions/workflows/ci.yml)
 
 An enterprise AI knowledge and data assistant built with Python,
 FastAPI, LangGraph, RAG, hybrid retrieval, tool calling, and React.
