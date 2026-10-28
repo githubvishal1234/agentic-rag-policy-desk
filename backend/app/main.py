@@ -11,6 +11,11 @@ from uuid import uuid4
 import json
 
 import anthropic
+from dotenv import load_dotenv
+
+# Keys and settings from the project's .env (see .env.example). Variables
+# already set in the environment win, so Docker and CI can override them.
+load_dotenv(Path(__file__).resolve().parents[2] / ".env")
 import openai
 from fastapi import Depends, FastAPI, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse

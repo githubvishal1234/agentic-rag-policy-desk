@@ -7,6 +7,16 @@ from app import main
 from app.services.embedding_service import EmbeddingService
 
 
+@pytest.fixture(autouse=True)
+def clean_settings(monkeypatch):
+    """Tests ignore any provider or sign-in settings from a local .env."""
+    for name in [
+        "LLM_PROVIDER", "LLM_MODEL", "LLM_BASE_URL", "LLM_API_KEY", "OPENAI_API_KEY",
+        "POLICY_DESK_PASSWORD", "POLICY_DESK_ADMIN_PASSWORD",
+    ]:
+        monkeypatch.delenv(name, raising=False)
+
+
 @pytest.fixture
 def docs_dir() -> Path:
     return Path(__file__).resolve().parents[2] / "data" / "sample"

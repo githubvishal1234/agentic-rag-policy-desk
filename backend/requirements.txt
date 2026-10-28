@@ -2,6 +2,7 @@ fastapi==0.142.2
 uvicorn==0.54.0
 python-multipart==0.0.32
 itsdangerous==2.2.0
+python-dotenv==1.2.4
 anthropic==1.15.0
 openai==3.40.0
 langgraph==1.2.16
