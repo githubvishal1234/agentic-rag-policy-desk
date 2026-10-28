@@ -9,7 +9,8 @@ Built with Python, FastAPI, LangGraph, FAISS, hybrid retrieval, tool
 calling and React. Works with Claude or any OpenAI-compatible model
 (OpenAI, Gemini, Groq, or Ollama running locally).
 
-**→ Full setup and usage guide: [RUNNING.md](RUNNING.md)**
+**→ Full setup and usage guide: [RUNNING.md](RUNNING.md)**  
+**→ Improvement plan: [ROADMAP.md](ROADMAP.md)**
 
 ## Quick start
 
