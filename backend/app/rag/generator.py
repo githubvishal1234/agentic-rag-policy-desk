@@ -1,8 +1,22 @@
+import os
 from functools import cache
 
 import anthropic
 
+from app.rag import openai_compat
+
+# Claude model; LLM_MODEL overrides it (and names the model for other providers).
 MODEL = "claude-opus-5-5"
+
+
+def provider() -> str:
+    """"anthropic" (default) or "openai" for any OpenAI-compatible API."""
+
+    return os.environ.get("LLM_PROVIDER", "anthropic").lower()
+
+
+def claude_model() -> str:
+    return os.environ.get("LLM_MODEL") or MODEL
 
 SYSTEM_PROMPT = (
     "You answer employee questions using only the provided company "
@@ -18,14 +32,21 @@ def get_client() -> anthropic.Anthropic:
 
 
 def has_credentials() -> bool:
-    """True when the client found an API key, auth token or login profile."""
+    """True when the selected provider has what it needs to answer."""
 
+    if provider() == "openai":
+        return openai_compat.is_configured()
+
+    # Claude: an API key, auth token or login profile.
     client = get_client()
     return bool(client.api_key or client.auth_token or client.credentials)
 
 
 def generate_answer(question: str, chunks: list[dict]) -> dict:
     """Answer a question from retrieved chunks, citing the chunks used."""
+
+    if provider() == "openai":
+        return openai_compat.answer_from_chunks(SYSTEM_PROMPT, question, chunks)
 
     documents = [
         {
@@ -42,7 +63,7 @@ def generate_answer(question: str, chunks: list[dict]) -> dict:
     ]
 
     response = get_client().beta.messages.create(
-        model=MODEL,
+        model=claude_model(),
         max_tokens=16000,
         output_config={"effort": "medium"},
         # Retry on another model if a safety classifier declines.

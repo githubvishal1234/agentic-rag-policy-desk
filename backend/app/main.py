@@ -11,6 +11,7 @@ from uuid import uuid4
 import json
 
 import anthropic
+import openai
 from fastapi import Depends, FastAPI, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -103,8 +104,9 @@ def require_credentials() -> None:
     if not has_credentials():
         raise HTTPException(
             503,
-            "The server has no Anthropic API key. Set ANTHROPIC_API_KEY "
-            "and restart the server.",
+            "The server has no LLM configured. Set ANTHROPIC_API_KEY, or "
+            "LLM_PROVIDER=openai with LLM_MODEL (see RUNNING.md), and "
+            "restart the server.",
         )
 
 
@@ -196,7 +198,7 @@ def query(request: QueryRequest):
 
     try:
         result = generate_answer(request.question, chunks)
-    except anthropic.APIError as error:
+    except (anthropic.APIError, openai.APIError) as error:
         raise HTTPException(502, f"LLM request failed: {error}")
 
     return {
@@ -218,7 +220,7 @@ def chat(request: ChatRequest):
             {"messages": [{"role": "user", "content": request.message}]},
             {"configurable": {"thread_id": thread_id}},
         )
-    except anthropic.APIError as error:
+    except (anthropic.APIError, openai.APIError) as error:
         raise HTTPException(502, f"LLM request failed: {error}")
     except GraphRecursionError:
         raise HTTPException(500, "The agent took too many steps")
@@ -267,7 +269,7 @@ def chat_stream(request: ChatRequest):
                 "thread_id": thread_id,
                 **summarize_turn(messages),
             })
-        except anthropic.APIError as error:
+        except (anthropic.APIError, openai.APIError) as error:
             yield event({"type": "error", "detail": f"LLM request failed: {error}"})
         except GraphRecursionError:
             yield event({"type": "error", "detail": "The agent took too many steps"})

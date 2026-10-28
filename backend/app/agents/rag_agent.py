@@ -7,7 +7,8 @@ from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.config import get_stream_writer
 from langgraph.graph import END, START, StateGraph
 
-from app.rag.generator import MODEL, get_client
+from app.rag import openai_compat
+from app.rag.generator import claude_model, get_client, provider
 from app.services.vector_store import FaissVectorStore
 
 SYSTEM_PROMPT = (
@@ -117,8 +118,19 @@ def build_agent(store: FaissVectorStore, store_lock: Lock, checkpointer=None):
         return [{"type": "text", "text": text}]
 
     def call_model(state: AgentState, config: RunnableConfig) -> dict:
+        stream_text = config["configurable"].get("stream_text")
+
+        if provider() == "openai":
+            content = openai_compat.agent_step(SYSTEM_PROMPT, TOOLS, state["messages"])
+            if stream_text:
+                # Sent in one piece: this path doesn't stream token by token.
+                text = "".join(b["text"] for b in content if b["type"] == "text")
+                if text:
+                    get_stream_writer()({"type": "text", "delta": text})
+            return {"messages": [{"role": "assistant", "content": content}]}
+
         params = dict(
-            model=MODEL,
+            model=claude_model(),
             max_tokens=16000,
             output_config={"effort": "medium"},
             # Retry on another model if a safety classifier declines.
@@ -129,7 +141,7 @@ def build_agent(store: FaissVectorStore, store_lock: Lock, checkpointer=None):
             messages=state["messages"],
         )
 
-        if config["configurable"].get("stream_text"):
+        if stream_text:
             # Forward answer text as it is generated; graph.stream() callers
             # receive it in stream_mode "custom".
             write = get_stream_writer()
@@ -175,8 +187,9 @@ def build_agent(store: FaissVectorStore, store_lock: Lock, checkpointer=None):
                     result["content"] = list_documents()
                 else:
                     raise ValueError(f"Unknown tool: {block['name']}")
-            except ValueError as error:
-                result["content"] = str(error)
+            except (ValueError, KeyError) as error:
+                # Bad or missing tool input; let the model see and recover.
+                result["content"] = f"Invalid tool call: {error!r}"
                 result["is_error"] = True
 
             results.append(result)

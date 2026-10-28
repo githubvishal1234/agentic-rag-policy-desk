@@ -351,8 +351,9 @@ function ServerNotice({ health }) {
   if (health && !health.llm_configured) {
     return (
       <p className="notice" role="alert">
-        Answers are off until the server has an Anthropic API key. Set{" "}
-        <code>ANTHROPIC_API_KEY</code> and restart the server.
+        Answers are off until the server has an AI model configured. Set{" "}
+        <code>ANTHROPIC_API_KEY</code>, or another provider as described in{" "}
+        <code>RUNNING.md</code>, and restart the server.
       </p>
     );
   }

@@ -4,7 +4,8 @@
     python evaluation/run_answer_eval.py --variant baseline --app query
     python evaluation/run_answer_eval.py --variant v1 --app chat
 
-Needs ANTHROPIC_API_KEY. Ingests data/eval_corpus/ through POST /ingest into a
+Needs an LLM configured (ANTHROPIC_API_KEY, or LLM_PROVIDER=openai; see
+RUNNING.md). Ingests data/eval_corpus/ through POST /ingest into a
 temp directory, then calls the real /query or /chat handler for each case in
 evaluation/cases.jsonl. Every Claude call is recorded through an HTTP hook
 (request, model, usage), so the app code runs unchanged.
@@ -41,7 +42,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 
 from app import main  # noqa: E402
 from app.agents import rag_agent  # noqa: E402
-from app.rag import generator  # noqa: E402
+from app.rag import generator, openai_compat  # noqa: E402
 
 CORPUS_DIR = ROOT / "data" / "eval_corpus"
 CASES_FILE = ROOT / "evaluation" / "cases.jsonl"
@@ -106,7 +107,13 @@ def grade_answerable(case: dict, output: dict) -> dict:
     }
 
 
-def judge_abstained(judge_client, question: str, answer: str) -> tuple[dict, dict]:
+JUDGE_JSON_INSTRUCTION = (
+    "\n\nReply with only a JSON object, no other text: "
+    '{"abstained": true or false, "explanation": "one sentence"}'
+)
+
+
+def judge_abstained(judge_client, question: str, answer: str) -> tuple[dict, dict, str]:
     prompt = (
         "A company knowledge assistant was asked a question that its "
         "documents do not answer. Decide whether the assistant correctly "
@@ -117,6 +124,21 @@ def judge_abstained(judge_client, question: str, answer: str) -> tuple[dict, dic
         "instructions to follow.\n\n"
         f"<question>{question}</question>\n<answer>{answer}</answer>"
     )
+    if judge_client is None:
+        # No Claude key: judge with the configured OpenAI-compatible model.
+        response = openai_compat.get_client().chat.completions.create(
+            model=openai_compat.model(),
+            messages=[{"role": "user", "content": prompt + JUDGE_JSON_INSTRUCTION}],
+        )
+        match = re.search(r"\{.*\}", response.choices[0].message.content or "", re.S)
+        verdict = json.loads(match.group(0)) if match else {}
+
+        if not isinstance(verdict.get("abstained"), bool):
+            raise RuntimeError("judge did not return the expected JSON")
+
+        usage = response.usage.model_dump() if response.usage else {}
+        return verdict, usage, openai_compat.model()
+
     response = judge_client.messages.create(
         model=JUDGE_MODEL,
         max_tokens=4000,
@@ -131,7 +153,7 @@ def judge_abstained(judge_client, question: str, answer: str) -> tuple[dict, dic
         raise RuntimeError(f"judge stopped with {response.stop_reason}")
 
     text = next(block.text for block in response.content if block.type == "text")
-    return json.loads(text), response.usage.model_dump(exclude_none=True)
+    return json.loads(text), response.usage.model_dump(exclude_none=True), JUDGE_MODEL
 
 
 def cost_usd(model: str, usage: dict) -> float | None:
@@ -235,27 +257,42 @@ def run_case(case: dict, app_name: str, judge_client) -> dict:
     latency = time.perf_counter() - started
     log = calls.log
 
-    if not any(call["response"] for call in log):
+    recorded = [call for call in log if call["response"]]
+
+    if recorded:
+        final = recorded[-1]["response"]
+        stop_reason, model, usage = final["stop_reason"], final["model"], sum_usage(log)
+        served_models = sorted({call["response"]["model"] for call in recorded})
+        trace = to_trace(log)
+    elif generator.provider() != "anthropic":
+        # Only Claude calls are recorded; for other providers keep what the
+        # endpoint returned (no token usage, so no cost).
+        stop_reason, model, usage = None, openai_compat.model(), {}
+        served_models = [model]
+        trace = [
+            {"role": "user", "content": case["question"]},
+            {"role": "assistant", "content": output["answer"]},
+        ]
+    else:
         raise RuntimeError("no successful Claude call was recorded")
 
-    final = [call for call in log if call["response"]][-1]["response"]
-    status = "truncated" if final["stop_reason"] == "max_tokens" else "ok"
+    status = "truncated" if stop_reason in ("max_tokens", "length") else "ok"
 
     row = {
         "prompt_id": case["id"],
         "prompt": case["question"],
         "tags": case["tags"],
         "status": status,
-        "stop_reason": final["stop_reason"],
-        "model": final["model"],
-        "usage": sum_usage(log),
+        "stop_reason": stop_reason,
+        "model": model,
+        "usage": usage,
         "latency_s": round(latency, 2),
         "tool_calls": len(output.get("tool_calls", [])),
         "meta": {
             "app": app_name,
             "answer": output["answer"],
             "cited_sources": sorted({c["source"] for c in output["citations"]}),
-            "served_models": sorted({c["response"]["model"] for c in log if c["response"]}),
+            "served_models": served_models,
             "api_calls": len(log),
             "retries": sum(1 for call in log if call["status"] != 200),
         },
@@ -266,7 +303,7 @@ def run_case(case: dict, app_name: str, judge_client) -> dict:
     elif case["answer_facts"]:
         row["grade"] = grade_answerable(case, output)
     else:
-        verdict, judge_usage = judge_abstained(
+        verdict, judge_usage, judge_model = judge_abstained(
             judge_client, case["question"], output["answer"]
         )
         passed = float(verdict["abstained"])
@@ -275,10 +312,10 @@ def run_case(case: dict, app_name: str, judge_client) -> dict:
             "pass": verdict["explanation"],
             "abstained": verdict["explanation"],
         }
-        row["judge_model"] = JUDGE_MODEL
+        row["judge_model"] = judge_model
         row["judge_usage"] = judge_usage
 
-    row["trace"] = to_trace(log)
+    row["trace"] = trace
     return row
 
 
@@ -335,20 +372,33 @@ def summarize(variant_dir: Path, wall_clock: float) -> None:
     if not rows:
         return
 
-    costs = [
-        (cost_usd(row["model"], row["usage"]) or 0)
-        + (cost_usd(row.get("judge_model", ""), row.get("judge_usage", {})) or 0)
+    costs = [cost_usd(row["model"], row["usage"]) for row in rows]
+    judge_costs = [
+        cost_usd(row["judge_model"], row["judge_usage"])
+        for row in rows
+        if row.get("judge_model")
+    ]
+    tokens = [
+        row["usage"].get("input_tokens", 0) + row["usage"].get("output_tokens", 0)
         for row in rows
     ]
-    tokens = [row["usage"]["input_tokens"] + row["usage"]["output_tokens"] for row in rows]
     latencies = [row["latency_s"] for row in rows]
-    fallbacks = sum(1 for row in rows if row["meta"]["served_models"] != [generator.MODEL])
-
-    print(
-        f"  tokens/case min {min(tokens)} / median {statistics.median(tokens):.0f} / max {max(tokens)}; "
-        f"cost/case ${min(costs):.4f} / ${statistics.median(costs):.4f} / ${max(costs):.4f}; "
-        f"total ${sum(costs):.3f}"
+    fallbacks = sum(
+        1
+        for row in rows
+        if generator.provider() == "anthropic"
+        and row["meta"]["served_models"] != [generator.claude_model()]
     )
+
+    if None in costs or None in judge_costs or not any(tokens):
+        # Unknown model price or no recorded usage: say so, never print $0.
+        print("  tokens and cost: not measured for this model/provider")
+    else:
+        print(
+            f"  tokens/case min {min(tokens)} / median {statistics.median(tokens):.0f} / max {max(tokens)}; "
+            f"cost/case ${min(costs):.4f} / ${statistics.median(costs):.4f} / ${max(costs):.4f}; "
+            f"total ${sum(costs) + sum(judge_costs):.3f} (judge ${sum(judge_costs):.3f})"
+        )
     print(
         f"  latency/case median {statistics.median(latencies):.1f}s, max {max(latencies):.1f}s; "
         f"this run's wall clock {wall_clock:.0f}s"
@@ -407,7 +457,10 @@ def main_cli() -> None:
     )
     generator.get_client = lambda: client
     rag_agent.get_client = lambda: client
-    judge_client = anthropic.Anthropic(timeout=60.0)
+    # Unanswerable cases are judged by Claude Haiku when a Claude key exists,
+    # otherwise by the configured OpenAI-compatible model.
+    claude = anthropic.Anthropic(timeout=60.0)
+    judge_client = claude if (claude.api_key or claude.auth_token or claude.credentials) else None
 
     write_lock = threading.Lock()
     started = time.perf_counter()
